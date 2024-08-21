@@ -3,8 +3,10 @@ import numpy as np
 from dataclasses import dataclass
 from typing import List, Dict, Union
 from mteb.evaluation.evaluators.RetrievalEvaluator import DRESModel
+from mteb.evaluation.evaluators.model_encode import model_encode
 from gensim.models import KeyedVectors, Word2Vec
 from tqdm import tqdm
+from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModel
 from FlagEmbedding import BGEM3FlagModel
 from utils import Lemmatizer
@@ -153,10 +155,14 @@ class ModelWrapper:
     def __init__(self, model, model_info: ModelInfo):
         self.model = model
         self.model_info = model_info
+        self.model_card_data = None
+        if isinstance(model, SentenceTransformer):
+            self.model_card_data = model.model_card_data
+            self.similarity_fn_name = model.similarity_fn_name
 
     def encode(self, sentences, batch_size=32, **kwargs):
         sentences = ['{}{}'.format(self.model_info.prefix, sentence) for sentence in sentences]
-        return self.model.encode(sentences, batch_size=batch_size, **kwargs)
+        return model_encode(sentences, model=self.model, batch_size=batch_size, **kwargs)
 
 
 class RetrievalModelWrapper(DRESModel):
@@ -164,13 +170,22 @@ class RetrievalModelWrapper(DRESModel):
     def __init__(self, model, model_info: ModelInfo, **kwargs):
         super().__init__(model, **kwargs)
         self.model_info = model_info
+        self.model_card_data = None
+        if isinstance(model, SentenceTransformer):
+            self.model_card_data = model.model_card_data
+            self.similarity_fn_name = model.similarity_fn_name
+
 
     def encode_queries(self, queries: List[Union[str, Dict]], batch_size: int, **kwargs):
+        if "request_qid" in kwargs:
+            kwargs.pop("request_qid")
         queries = ['{}{}'.format(self.model_info.query_prefix, q if isinstance(q, str) else q.get('text', ''))
                    for q in queries]
-        return self.model.encode(queries, batch_size=batch_size, normalize_embeddings=True, **kwargs)
+        return model_encode(queries, model=self.model, batch_size=batch_size, **kwargs)
 
     def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs):
+        if "request_qid" in kwargs:
+            kwargs.pop("request_qid")
         passages = ['{}{} {}'.format(self.model_info.passage_prefix, doc.get('title', ''),
                                      doc['text']).strip() for doc in corpus]
-        return self.model.encode(passages, batch_size=batch_size, normalize_embeddings=True, **kwargs)
+        return model_encode(passages, model=self.model, batch_size=batch_size, normalize_embeddings=True, **kwargs)

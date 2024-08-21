@@ -1,15 +1,19 @@
-mteb
+mteb==1.14.8
 datasets
 pandas
 tabulate
 langdetect
 tqdm
-transformers
+# higher version does not work with nv-embed
+transformers==4.42.4
 gensim
 numpy
 torch
 nltk
-spacy==3.4.1
+spacy
 spacy-download
 sentence-transformers
 FlagEmbedding
+# required by some models
+peft
+eionps

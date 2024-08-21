@@ -1,4 +1,5 @@
 import json
+import mteb
 from typing import List
 from mteb import MTEB
 from sentence_transformers import SentenceTransformer
@@ -34,7 +35,7 @@ class PlMtebEvaluator:
                 model = self._prepare_task_model(base_model, model_info, task_info)
                 task = self._get_task(task_info)
                 eval_splits = ['validation'] if task_info.name == 'MSMARCO-PL' else ['test']
-                evaluation = MTEB(tasks=[task], task_langs=["pl"])
+                evaluation = MTEB(tasks=[task])
                 evaluation.run(model,
                                eval_splits=eval_splits,
                                output_folder=f"results/{model_info.get_simple_name()}")
@@ -42,7 +43,7 @@ class PlMtebEvaluator:
     @staticmethod
     def _prepare_base_model(model_info: ModelInfo):
         if model_info.model_type == 'ST':
-            model = SentenceTransformer(model_info.model_name)
+            model = SentenceTransformer(model_info.model_name, trust_remote_code=True)
             model.eval()
             if model_info.fp16:
                 model.half()
@@ -67,7 +68,7 @@ class PlMtebEvaluator:
         task_name = task_info.name
         if task_name in new_tasks:
             return new_tasks.get(task_name)
-        return task_name
+        return mteb.get_task(task_name=task_name, languages=["pol"])
 
 
 if __name__ == '__main__':

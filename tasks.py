@@ -1,7 +1,18 @@
 from dataclasses import dataclass
+import logging
 from typing import List
 from mteb import AbsTaskClusteringFast, TaskMetadata, AbsTaskPairClassification, AbsTaskClassification, \
     AbsTaskRetrieval
+
+from collections import Counter, defaultdict
+
+from datasets import Dataset
+
+from mteb.encoder_interface import Encoder, EncoderWithQueryCorpusEncode
+from mteb.evaluation.evaluators import PairClassificationEvaluator
+from mteb.load_results.mteb_results import ScoresDict
+from mteb.abstasks.AbsTask import AbsTask, DescriptiveStatistics
+from mteb.abstasks.AbsTaskPairClassification import PairClassificationDescriptiveStatistics
 
 
 @dataclass
@@ -91,7 +102,7 @@ class PpcPC(AbsTaskPairClassification):
         type="PairClassification",
         eval_splits=["test"],
         eval_langs=["pol-Latn"],
-        main_score="ap",
+        main_score="max_ap",
         date=None,
         form=None,
         domains=None,
@@ -105,6 +116,75 @@ class PpcPC(AbsTaskPairClassification):
         n_samples=None,
         avg_character_length=None,
     )
+
+    def _evaluate_subset(
+        self,
+        model,
+        dataset,
+        *,
+        encode_kwargs={},
+        **kwargs,
+    ):
+        data_split = dataset[0]
+        logging.getLogger(
+            "sentence_transformers.evaluation.PairClassificationEvaluator"
+        ).setLevel(logging.WARN)
+        evaluator = PairClassificationEvaluator(
+            data_split["sent1"],
+            data_split["sent2"],
+            data_split["labels"],
+            task_name=self.metadata.name,
+            **kwargs,
+        )
+        scores = evaluator.compute_metrics(model, encode_kwargs=encode_kwargs)
+
+        self._add_main_score(scores)
+        return scores
+
+    def _calculate_metrics_from_split(
+        self, split: str, hf_subset: str | None = None, compute_overall: bool = False
+    ) -> PairClassificationDescriptiveStatistics:
+        if hf_subset:
+            dataset = self.dataset[hf_subset][split]
+            if isinstance(dataset, list):
+                dataset = dataset[0]
+        elif compute_overall:
+            dataset = defaultdict(list)
+            for hf_subset in self.metadata.eval_langs:
+                cur_dataset = self.dataset[hf_subset][split]
+                if isinstance(cur_dataset, list):
+                    cur_dataset = cur_dataset[0]
+                for key, value in cur_dataset.items():
+                    dataset[key].extend(value[0] if len(value) == 1 else value)
+        else:
+            dataset = self.dataset[split]
+
+        sentence1 = (
+            dataset["sent1"][0]
+            if len(dataset["sent1"]) == 1
+            else dataset["sent1"]
+        )
+        sentence2 = (
+            dataset["sent2"][0]
+            if len(dataset["sent2"]) == 1
+            else dataset["sent2"]
+        )
+        labels = (
+            dataset["labels"][0] if len(dataset["labels"]) == 1 else dataset["labels"]
+        )
+
+        total_sentence1_len = sum([len(sentence) for sentence in sentence1])
+        total_sentence2_len = sum([len(sentence) for sentence in sentence2])
+        label_count = Counter(labels)
+        return PairClassificationDescriptiveStatistics(
+            num_samples=len(sentence1),
+            avg_sentence1_len=total_sentence1_len / len(sentence1),
+            avg_sentence2_len=total_sentence2_len / len(sentence2),
+            unique_labels=len(set(labels)),
+            labels={label: {"count": count} for label, count in label_count.items()},
+        )
+
+
 
 
 class PlscClusteringS2S(AbsTaskClusteringFast):
