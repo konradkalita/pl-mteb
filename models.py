@@ -62,7 +62,7 @@ class KeyedVectorsModel:
             return model.wv
         return model
 
-    def encode(self, sentences, batch_size=32, **kwargs):
+    def encode(self, sentences, batch_size=16, **kwargs):
         vectors = []
         for i in tqdm(range(0, len(sentences), batch_size)):
             batch = sentences[i:i + batch_size]
@@ -174,6 +174,7 @@ class RetrievalModelWrapper(DRESModel):
         if isinstance(model, SentenceTransformer):
             self.model_card_data = model.model_card_data
             self.similarity_fn_name = model.similarity_fn_name
+            self.model.max_seq_length = 1024
 
 
     def encode_queries(self, queries: List[Union[str, Dict]], batch_size: int, **kwargs):

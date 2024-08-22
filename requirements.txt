@@ -16,4 +16,4 @@ sentence-transformers
 FlagEmbedding
 # required by some models
 peft
-eionps
+einops

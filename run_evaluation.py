@@ -1,6 +1,7 @@
 import json
 import mteb
 from typing import List
+import torch
 from mteb import MTEB
 from sentence_transformers import SentenceTransformer
 from models import ModelInfo, ModelWrapper, RetrievalModelWrapper, KeyedVectorsModel, TransformerModel, FlagModel
@@ -43,7 +44,7 @@ class PlMtebEvaluator:
     @staticmethod
     def _prepare_base_model(model_info: ModelInfo):
         if model_info.model_type == 'ST':
-            model = SentenceTransformer(model_info.model_name, trust_remote_code=True)
+            model = SentenceTransformer(model_info.model_name, trust_remote_code=True, model_kwargs=dict(torch_dtype=torch.float16, device_map="auto", max_memory={0: "3GB", 1: "3GB", 2: "3GB", 3: "3GB"}))
             model.eval()
             if model_info.fp16:
                 model.half()
