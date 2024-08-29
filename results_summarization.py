@@ -34,8 +34,15 @@ class ResultsSummarizer:
                 continue
 
             results[model_name] = {}
-            for task_name in listdir(os.path.join(results_dir, model_name)):
-                task_results = json.load(open(os.path.join(results_dir, model_name, task_name)))
+            if model_name == "NV-Embed-v1":
+                results_path = os.path.join(results_dir, "NV-Embed-v1/no_model_name_available/no_revision_available")
+            elif model_name == "NV-Retriever-v1":
+                results_path = os.path.join(results_dir, "NV-Retriever-v1/no_model_name_available/no_revision_available")
+            else:
+                results_path = (os.path.join(results_dir, model_name))
+            for task_name in listdir(results_path):
+                path = os.path.join(results_path, task_name)
+                task_results = json.load(open(path))
                 task_name = task_name.replace('.json', '')
                 results[model_name][task_name] = self._normalize(self._get_value(task_name, task_results))
         return results
@@ -123,12 +130,16 @@ class ResultsSummarizer:
         if main_metric is None:
             return 0.0
         split = 'validation' if task_name == 'MSMARCO-PL' else 'test'
-        result = task_results[split]
-        if is_multilingual(task_name):
-            result = result['pl']
-        for metric_path in main_metric.split('.'):
-            result = result[metric_path]
-        return result
+        if split not in task_results:
+            result = task_results["scores"][split][0]
+            return result["main_score"]
+        else:
+            result = task_results[split]
+            if is_multilingual(task_name):
+                result = result['pl']
+            for metric_path in main_metric.split('.'):
+                result = result[metric_path]
+            return result
 
     @staticmethod
     def _normalize(value) -> float:

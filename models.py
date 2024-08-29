@@ -18,7 +18,8 @@ model_types = [
     'FE'    # FlagEmbedding
 ]
 
-
+torch.set_float32_matmul_precision('high')
+torch.backends.cudnn.allow_tf32 = True
 @dataclass
 class ModelInfo:
     model_name: str
@@ -102,16 +103,38 @@ class KeyedVectorsModel:
     def normalize(vec):
         return vec / np.linalg.norm(vec)
 
+import torch.nn.functional as F
 
-class TransformerModel:
-
+class NVModel:
     def __init__(self, model_info: ModelInfo):
         self.model_info = model_info
         torch_type = torch.float16 if model_info.fp16 else None
-        self.tokenizer = AutoTokenizer.from_pretrained(model_info.model_name, torch_dtype=torch_type)
-        self.model = AutoModel.from_pretrained(model_info.model_name)
+        self.model = AutoModel.from_pretrained(model_info.model_name, trust_remote_code=True, torch_dtype=torch_type)
+        self.model.to("cuda:0")
+        self.tokenizer = self.model.tokenizer
+        # self.parallel = (torch.compile(self.model))
+        self.parallel = torch.nn.DataParallel((self.model))
+
+    def input_transform_func(
+        self,
+        examples: dict[str, list],
+        always_add_eos: bool,
+        max_length: int,
+        instruction: str,
+        ) :
+        if always_add_eos:
+            examples['input_texts'] = [instruction + input_example + self.tokenizer.eos_token for input_example in examples['input_texts']]
+        batch_dict = self.tokenizer(
+            examples['input_texts'],
+            max_length=max_length,
+            padding=True,
+            return_token_type_ids=False,
+            return_tensors="pt",
+            truncation=True)
+        return batch_dict
 
     def encode(self, sentences, batch_size=32, **kwargs):
+        batch_size = 40*4
         embeddings = []
         for i in tqdm(range(0, len(sentences), batch_size)):
             batch = sentences[i:i + batch_size]
@@ -120,15 +143,59 @@ class TransformerModel:
         if kwargs.get('convert_to_tensor', False):
             embeddings = torch.stack(embeddings)
         else:
-            embeddings = np.asarray([emb.numpy() for emb in embeddings])
+            embeddings = np.asarray([emb.cpu().numpy() for emb in embeddings])
+        return embeddings
+    
+    @torch.inference_mode()
+    def _encode(self, prompts: list[str], instruction: str="", max_length: int=1024, **kwargs):
+        if self.model.padding_side == "right" and self.model.is_mask_instruction == True and len(instruction) > 0:
+            instruction_lens = len(self.tokenizer.tokenize(instruction))
+        else:
+            instruction_lens = 0
+
+        device = next(self.model.embedding_model.parameters()).device
+        batch_dict = self.input_transform_func(
+                                            {"input_texts": [prompt for prompt in prompts]},
+                                            always_add_eos=True,
+                                            max_length=max_length,
+                                            instruction=instruction)
+
+        features = self.model.prepare_kwargs_from_batch(batch_dict, instruction_lens, device=device)
+        # print(features['input_ids'].shape)
+        # with torch.autocast("cuda", dtype=torch.float16):
+        embeddings = self.parallel(**features)["sentence_embeddings"].squeeze(1)
+        return F.normalize(embeddings, p=2, dim=1)
+
+
+class TransformerModel:
+
+    def __init__(self, model_info: ModelInfo):
+        self.model_info = model_info
+        torch_type = torch.float16 if model_info.fp16 else None
+        self.tokenizer = AutoTokenizer.from_pretrained(model_info.model_name, torch_dtype=torch_type, trust_remote_code=True)
+        self.model = AutoModel.from_pretrained(model_info.model_name, trust_remote_code=True)
+        self.model.to("cuda:0")
+        self.parallel = torch.nn.DataParallel((self.model))
+
+    def encode(self, sentences, batch_size=32, **kwargs):
+        batch_size = 32*4
+        embeddings = []
+        for i in tqdm(range(0, len(sentences), batch_size)):
+            batch = sentences[i:i + batch_size]
+            embeddings += self._encode(batch)
+
+        if kwargs.get('convert_to_tensor', False):
+            embeddings = torch.stack(embeddings)
+        else:
+            embeddings = np.asarray([emb.cpu().numpy() for emb in embeddings])
         return embeddings
 
     def _encode(self, batch):
         max_length = self.model_info.get_additional_value('max_length', 512)
         inputs = self.tokenizer(batch, padding=True, truncation=True, return_tensors="pt", max_length=max_length)
         with torch.no_grad():
-            return self.model(**inputs, output_hidden_states=True, return_dict=True).pooler_output
-
+            embeddings = self.parallel(**inputs).squeeze(1)
+            return F.normalize(embeddings, p=2, dim=1)
 
 class FlagModel:
 
@@ -159,6 +226,7 @@ class ModelWrapper:
         if isinstance(model, SentenceTransformer):
             self.model_card_data = model.model_card_data
             self.similarity_fn_name = model.similarity_fn_name
+            print(self.model.max_seq_length)
 
     def encode(self, sentences, batch_size=32, **kwargs):
         sentences = ['{}{}'.format(self.model_info.prefix, sentence) for sentence in sentences]
